@@ -81,6 +81,14 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
+  uint64 va;
+  uint64 buff;
+  int npages;
+  if(argaddr(0, &va) < 0 || argint(1, &npages) < 0 || argaddr(2, &buff) < 0)
+    return -1;
+  struct proc *p = myproc();
+  uint32 ret = detpgaccess(p->pagetable, va, npages);
+  copyout(p->pagetable, buff, (char *)&ret, sizeof(ret));
   return 0;
 }
 #endif

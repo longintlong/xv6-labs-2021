@@ -432,3 +432,59 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+uint32
+detpgaccess(pagetable_t pagetable, uint64 va, int npages) {
+  if(va >= MAXVA)
+    panic("detpgaccess");
+  va = PGROUNDDOWN(va);
+  // if((va % PGSIZE) != 0)
+  //   panic("detpgaccess: not aligned");
+  if(npages > 64)
+    panic("detpgaccess: beyond 64 pages");
+
+  uint64 a;
+  uint32 ret = 0;
+  pte_t *pte;
+  for(int i = 0; i < npages; ++i){
+    a = va + i * PGSIZE;
+    if((pte = walk(pagetable, a, 0)) == 0)
+      panic("detpgaccess: walk");
+    if(PTE_FLAGS(*pte) == PTE_V)
+      panic("detpgaccess: not a leaf");
+    if((*pte & PTE_V) == 0)
+      panic("detpgaccess: not mapped");
+    if((*pte & PTE_A)) {
+      ret |= (1 << i);
+    }
+    *pte &= (~PTE_A);
+  }
+  return ret;
+}
+
+void
+printpgtbl(pagetable_t pagetable, int level) {
+  char *prefix;
+  if(level == 0)
+    prefix = "..";
+  else if (level == 1)
+    prefix = ".. ..";
+  else 
+    prefix = ".. .. ..";
+  
+  for(int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V)) {
+      uint64 child = PTE2PA(pte);
+      printf(" %s%d: pte %p pa %p\n", prefix, i, pte, child);
+      if(level < 2)
+        printpgtbl((pagetable_t)child, level + 1);
+    }
+  }
+}
+
+void
+vmprint(pagetable_t pagetable) {
+  printf("page table %p\n", pagetable);
+  printpgtbl(pagetable, 0);
+}
