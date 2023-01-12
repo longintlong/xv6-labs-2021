@@ -70,6 +70,7 @@ sys_sleep(void)
     sleep(&ticks, &tickslock);
   }
   release(&tickslock);
+  backtrace();
   return 0;
 }
 
@@ -94,4 +95,40 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64 sys_sigreturn(void) {
+  struct proc *p = myproc();
+  p->tickelapsed = 0;
+  if(p->alarminterval != 0)
+    p->alarminterval = -p->alarminterval;
+  uint64* start = (uint64* )&(p->alarm_trapframe);
+  for(int i = 0; i < (sizeof(struct trapframe) / sizeof(uint64)); ++i) {
+    if(i == 0 || i == 1 || i == 2 || i == 4)
+      continue;
+    ((uint64*)p->trapframe)[i] = start[i];
+  }
+  return 0;
+}
+
+uint64 sys_sigalarm(void) {
+  int n;
+  uint64 func_ptr;
+
+  if(argint(0, &n) < 0)
+    return -1;
+  if(argaddr(1, &func_ptr) < 0)
+    return -1;
+  struct proc *p = myproc();
+  if(n == 0 && func_ptr == 0) {
+    // sigalarm(0, 0) means the kernel should stop 
+    // generating periodic alarm calls.
+    p->alarminterval = -1;
+    p->handler = 0;
+  } else {
+    p->alarminterval = n;
+    p->handler = (void(*)())func_ptr;
+  }
+
+  return 0;
 }

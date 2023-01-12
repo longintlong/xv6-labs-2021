@@ -29,6 +29,15 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+void alarmtrapret();
+
+void save_trapframe() {
+  struct proc *p = myproc();
+  uint64* start = (uint64* )&(p->alarm_trapframe);
+  for(int i = 0; i < (sizeof(struct trapframe) / sizeof(uint64)); ++i) {
+    start[i] = ((uint64*)(p->trapframe))[i];
+  }
+}
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -77,8 +86,16 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    if(p->alarminterval > 0) {
+      p->tickelapsed += 1;
+      if(p->tickelapsed >= p->alarminterval) {
+        save_trapframe();
+        alarmtrapret();
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }
@@ -218,3 +235,45 @@ devintr()
   }
 }
 
+
+void alarmtrapret() {
+  struct proc *p = myproc();
+
+  // we're about to switch the destination of traps from
+  // kerneltrap() to usertrap(), so turn off interrupts until
+  // we're back in user space, where usertrap() is correct.
+  intr_off();
+
+  // send syscalls, interrupts, and exceptions to trampoline.S
+  w_stvec(TRAMPOLINE + (uservec - trampoline));
+
+  // set up trapframe values that uservec will need when
+  // the process next re-enters the kernel.
+  p->trapframe->kernel_satp = r_satp();         // kernel page table
+  p->trapframe->kernel_sp = p->kstack + PGSIZE; // process's kernel stack
+  p->trapframe->kernel_trap = (uint64)usertrap;
+  p->trapframe->kernel_hartid = r_tp();         // hartid for cpuid()
+
+  // set up the registers that trampoline.S's sret will use
+  // to get to user space.
+  
+  // set S Previous Privilege mode to User.
+  unsigned long x = r_sstatus();
+  x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
+  x |= SSTATUS_SPIE; // enable interrupts in user mode
+  w_sstatus(x);
+
+  // set S Exception Program Counter to the saved user pc.
+  // w_sepc(p->trapframe->epc);
+  w_sepc((uint64)p->handler);
+  p->alarminterval = -p->alarminterval;
+
+  // tell trampoline.S the user page table to switch to.
+  uint64 satp = MAKE_SATP(p->pagetable);
+
+  // jump to trampoline.S at the top of memory, which 
+  // switches to the user page table, restores user registers,
+  // and switches to user mode with sret.
+  uint64 fn = TRAMPOLINE + (userret - trampoline);
+  ((void (*)(uint64,uint64))fn)(TRAPFRAME, satp);
+}
