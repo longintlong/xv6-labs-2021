@@ -123,7 +123,7 @@ uint64 sys_sigalarm(void) {
   if(n == 0 && func_ptr == 0) {
     // sigalarm(0, 0) means the kernel should stop 
     // generating periodic alarm calls.
-    p->alarminterval = -1;
+    p->alarminterval = 0;
     p->handler = 0;
   } else {
     p->alarminterval = n;
