@@ -303,7 +303,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -311,20 +311,65 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    *pte = (*pte | PTE_COW) & ~(PTE_W);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    // printf("%d, %d  uvmcopy\n", i, sz);
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      // kfree(mem);
       goto err;
     }
+    addrefcnt(pa);
   }
   return 0;
 
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
+}
+
+
+int cowhandler(pagetable_t pagetable, uint64 va) {
+  if(PGROUNDDOWN(va) >= MAXVA) {
+    return -1;
+  }
+
+  pte_t *pte;
+  uint64 a = PGROUNDDOWN(va);
+  if((pte = walk(pagetable, a, 0)) == 0) {
+    return -1;
+  }
+  // check COW flag
+  if(!(*pte & PTE_COW)) {
+    return -1;
+  }
+  uint64 pa = PTE2PA(*pte);
+
+  if(pa == 0) {
+    return -1;
+  }
+
+  if(getrefcount(pa) == 1) {
+    *pte = (*pte | PTE_W) & ~(PTE_COW);
+    return 0;
+  }
+
+  char *mem;
+  uint flags = PTE_FLAGS(*pte);
+  flags = (flags | PTE_W) & ~(PTE_COW);
+  if((mem = (char*)kalloc()) == 0) {
+    return -1;
+  }
+  memmove((void*)mem, (void*)pa, PGSIZE);
+  *pte = PA2PTE(mem) | flags;
+  kfree((void*)pa);
+  // if(mappages(pagetable, va, PGSIZE, (uint64)mem, flags) != 0){
+  //   kfree(mem);
+  //   return -1;
+  // }
+  return 0;
 }
 
 // mark a PTE invalid for user access.
@@ -346,10 +391,21 @@ uvmclear(pagetable_t pagetable, uint64 va)
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
+  if(dstva >= MAXVA) {
+    return -1;
+  }
+
   uint64 n, va0, pa0;
+  pte_t *pte;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    pte = walk(pagetable, va0, 1);
+    if(*pte & PTE_COW) {
+      if(cowhandler(pagetable, va0) < 0) {
+        return -1;
+      }
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;

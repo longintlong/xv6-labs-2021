@@ -121,6 +121,7 @@ piperead(struct pipe *pi, uint64 addr, int n)
     if(pi->nread == pi->nwrite)
       break;
     ch = pi->data[pi->nread++ % PIPESIZE];
+    // printf("piperead\n");
     if(copyout(pr->pagetable, addr + i, &ch, 1) == -1)
       break;
   }

@@ -23,6 +23,39 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct {
+  struct spinlock lock;
+  int refcnt[(PHYSTOP - KERNBASE) / PGSIZE];
+} refcount;
+
+int getrefcount(uint64 pa) {
+  int ret;
+  acquire(&refcount.lock);
+  uint64 pageid = (pa - KERNBASE) / PGSIZE;
+  ret = refcount.refcnt[pageid];
+  release(&refcount.lock);
+  return ret;
+}
+
+void addrefcnt(uint64 pa) {
+  uint64 pageid = (pa - KERNBASE) / PGSIZE;
+  acquire(&refcount.lock);
+  refcount.refcnt[pageid] += 1;
+  release(&refcount.lock);
+}
+
+int delrefcnt(uint64 pa) {
+  int ret;
+
+  uint64 pageid = (pa - KERNBASE) / PGSIZE;
+  acquire(&refcount.lock);
+  refcount.refcnt[pageid] -= 1;
+  ret = refcount.refcnt[pageid];
+  release(&refcount.lock);
+
+  return ret;
+}
+
 void
 kinit()
 {
@@ -51,6 +84,10 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+  if(delrefcnt((uint64)pa) > 0) {
+    return;
+  }
+
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -78,5 +115,12 @@ kalloc(void)
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
+
+  if(r) {
+    uint64 pageid = ((uint64)r - KERNBASE) / PGSIZE;
+    acquire(&refcount.lock);
+    refcount.refcnt[pageid] = 1;
+    release(&refcount.lock);
+  }
   return (void*)r;
 }
