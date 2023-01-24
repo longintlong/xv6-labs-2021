@@ -401,7 +401,47 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
 
+  bn -= NINDIRECT;
+  if(bn < NINDIRECT * NINDIRECT) {
+    if((addr = ip->addrs[NDIRECT + 1]) == 0)
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+
+    if((addr = a[bn / NINDIRECT]) == 0) {
+      a[bn / NINDIRECT] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    bn -= (bn / NINDIRECT * NINDIRECT);
+    
+    if((addr = a[bn]) == 0) {
+      a[bn] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
+
   panic("bmap: out of range");
+}
+
+int writetarget(struct inode *ip, char *target) {
+  struct buf *bp;
+
+  bp = bread(ip->dev, bmap(ip, 0));
+  if(either_copyin(bp->data, 0, (uint64)target, strlen(target) + 1) == -1) {
+    brelse(bp);
+    return -1;
+  }
+  log_write(bp);
+  brelse(bp);
+
+  ip->size = strlen(target) + 1;
+  iupdate(ip);
+  return 0;
 }
 
 // Truncate inode (discard contents).
@@ -410,8 +450,8 @@ void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
-  uint *a;
+  struct buf *bp, *bpp;
+  uint *a, *aa;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -426,6 +466,29 @@ itrunc(struct inode *ip)
     for(j = 0; j < NINDIRECT; j++){
       if(a[j])
         bfree(ip->dev, a[j]);
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT]);
+    ip->addrs[NDIRECT] = 0;
+  }
+
+  if(ip->addrs[NDIRECT + 1]) {
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if(a[j]) {
+        bpp = bread(ip->dev, a[j]);
+        aa = (uint*)bpp->data;
+        for(int k = 0; k < NINDIRECT; k++) {
+          if(aa[k]) {
+            bfree(ip->dev, aa[k]);
+            aa[k] = 0;
+          }
+        }
+        brelse(bpp);
+        bfree(ip->dev, a[j]);
+        a[j] = 0;
+      }
     }
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);

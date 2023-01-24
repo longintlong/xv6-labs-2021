@@ -283,6 +283,29 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+uint64 sys_symlink(void) {
+  char path[MAXPATH], target[MAXPATH];
+  struct inode *ip;
+  int n;
+
+  if((n = argstr(0, target, MAXPATH)) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+  begin_op();
+
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+  // ilock(ip);
+  if(writetarget(ip, target) < 0) {
+    panic("symlink: writetarget");
+  }
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
 uint64
 sys_open(void)
 {
@@ -313,6 +336,35 @@ sys_open(void)
       iunlockput(ip);
       end_op();
       return -1;
+    }
+    if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)) {
+      char target[MAXPATH];
+      int ret, depth = 0;
+      struct inode *next = 0;
+      while(depth < MAXDEPTH) {
+        if((ret = readi(ip, 0, (uint64)target, 0, MAXPATH)) == 0) {
+          panic("sys_open: readi");
+        }
+        iunlockput(ip);
+        if((next = namei(target)) == 0) {
+          printf("ip == 0 %s\n", target);
+          end_op();
+          return -1;
+        }
+        ilock(next);
+        if(next->type != T_SYMLINK) {
+          ip = next;
+          break;
+        }
+        ip = next;
+        depth++;
+      }
+      if(depth >= MAXDEPTH) {
+        printf("recycle inode link\n");
+        iunlockput(ip);
+        end_op();
+        return -2;
+      }
     }
   }
 
